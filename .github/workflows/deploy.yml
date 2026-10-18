@@ -16,34 +16,93 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: "126309364316"
   ECR_REPOSITORY: devsecops-lab-api
 
 jobs:
   build-and-push:
-    name: Build and Push Docker Image
+    name: Build, Test, and Push Docker Image
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
+      # 1. Download the repository source code
       - name: Checkout source code
         uses: actions/checkout@v4
 
+      # 2. Authenticate to AWS using GitHub OIDC
       - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::126309364316:role/GitHubActionsDevSecOpsRole
           aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActionsDevSecOps
+          retry-max-attempts: 1
 
+      # 3. Verify the AWS identity assumed by GitHub Actions
+      - name: Verify AWS identity
+        run: |
+          aws sts get-caller-identity
+
+      # 4. Authenticate Docker to Amazon ECR
       - name: Log in to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag, and push Docker image
+      # 5. Build the Docker image
+      - name: Build Docker image
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
           docker build \
+            --pull \
             -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
             ./app
 
+      # 6. Verify that the image starts and responds to a health check
+      - name: Test Docker image
+        run: |
+          set -e
+
+          docker run -d \
+            --name devsecops-api-test \
+            -p 127.0.0.1:8000:8000 \
+            "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
+
+          cleanup() {
+            docker logs devsecops-api-test || true
+            docker rm -f devsecops-api-test >/dev/null 2>&1 || true
+          }
+
+          trap cleanup EXIT
+
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:8000/health; then
+              echo
+              echo "API health check passed."
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          echo "API health check failed."
+          exit 1
+
+      # 7. Push the tested image to ECR
+      - name: Push Docker image to ECR
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
           docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+      # 8. Display the published image reference
+      - name: Display published image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          echo "Successfully published:"
+          echo "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
