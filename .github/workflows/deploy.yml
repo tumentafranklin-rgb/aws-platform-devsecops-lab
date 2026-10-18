@@ -12,7 +12,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 env:
   AWS_REGION: us-east-1
@@ -20,89 +19,77 @@ env:
   ECR_REPOSITORY: devsecops-lab-api
 
 jobs:
-  build-and-push:
+  build-test-and-push:
     name: Build, Test, and Push Docker Image
     runs-on: ubuntu-latest
-    timeout-minutes: 15
 
     steps:
-      # 1. Download the repository source code
+      # Step 1: Check out the source code
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # 2. Authenticate to AWS using GitHub OIDC
-      - name: Configure AWS credentials using OIDC
+      # Step 2: Authenticate to AWS using GitHub secrets
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::126309364316:role/GitHubActionsDevSecOpsRole
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: GitHubActionsDevSecOps
-          retry-max-attempts: 1
 
-      # 3. Verify the AWS identity assumed by GitHub Actions
+      # Step 3: Verify AWS identity
       - name: Verify AWS identity
-        run: |
-          aws sts get-caller-identity
+        run: aws sts get-caller-identity
 
-      # 4. Authenticate Docker to Amazon ECR
+      # Step 4: Log in to Amazon ECR
       - name: Log in to Amazon ECR
-        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 5. Build the Docker image
+      # Step 5: Build the Docker image
       - name: Build Docker image
         env:
-          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
+          IMAGE="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG"
+
           docker build \
-            --pull \
-            -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+            --tag "$IMAGE" \
             ./app
 
-      # 6. Verify that the image starts and responds to a health check
+          echo "Built image: $IMAGE"
+
+      # Step 6: Test the FastAPI container
       - name: Test Docker image
+        env:
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          set -e
+          IMAGE="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG"
 
           docker run -d \
             --name devsecops-api-test \
             -p 127.0.0.1:8000:8000 \
-            "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
+            "$IMAGE"
 
           cleanup() {
-            docker logs devsecops-api-test || true
             docker rm -f devsecops-api-test >/dev/null 2>&1 || true
           }
 
           trap cleanup EXIT
 
           for attempt in $(seq 1 20); do
-            if curl --fail --silent http://127.0.0.1:8000/health; then
+            if curl --fail --silent \
+              http://127.0.0.1:8000/health; then
               echo
-              echo "API health check passed."
+              echo "API health check passed!"
               exit 0
             fi
 
-            sleep 2
+            echo "Waiting for API to become healthy..."
+            sleep 3
           done
 
-          echo "API health check failed."
+          echo "ERROR: API health check failed."
+          docker logs devsecops-api-test
           exit 1
 
-      # 7. Push the tested image to ECR
+      # Step 7: Push the tested image to ECR
       - name: Push Docker image to ECR
-        env:
-          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-
-      # 8. Display the published image reference
-      - name: Display published image
-        env:
-          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          echo "Successfully published:"
-          echo "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
