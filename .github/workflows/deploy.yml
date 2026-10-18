@@ -10,12 +10,14 @@ on:
 
   workflow_dispatch:
 
+# Allow GitHub to read the repository and request an OIDC token.
 permissions:
   contents: read
   id-token: write
 
 env:
   AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: "126309364316"
   ECR_REPOSITORY: devsecops-lab-api
 
 jobs:
@@ -24,11 +26,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Download source code
+      # Step 1: Download the repository.
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # Step 2: Build the Docker image
+      # Step 2: Build the Docker image.
       - name: Build Docker image
         env:
           IMAGE_TAG: ${{ github.sha }}
@@ -37,7 +39,7 @@ jobs:
             -t "$ECR_REPOSITORY:$IMAGE_TAG" \
             ./app
 
-      # Step 3: Test the Docker image
+      # Step 3: Start the container and test the API.
       - name: Test Docker image
         env:
           IMAGE_TAG: ${{ github.sha }}
@@ -48,7 +50,8 @@ jobs:
             "$ECR_REPOSITORY:$IMAGE_TAG"
 
           for attempt in $(seq 1 20); do
-            if curl --fail --silent http://127.0.0.1:8000/health; then
+            if curl --fail --silent \
+              http://127.0.0.1:8000/health; then
               echo
               echo "API health check passed!"
               docker rm -f devsecops-api-test
@@ -63,34 +66,53 @@ jobs:
           docker rm -f devsecops-api-test || true
           exit 1
 
-      # Step 4: Scan the image for vulnerabilities
+      # Step 4: Scan for HIGH and CRITICAL vulnerabilities.
       - name: Scan Docker image with Trivy
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: devsecops-lab-api:${{ github.sha }}
           format: table
-          exit-code: '1'
+          exit-code: "1"
           ignore-unfixed: true
           vuln-type: os,library
           severity: CRITICAL,HIGH
 
-      # Step 5: Authenticate to AWS using GitHub OIDC
+      # Step 5: Print safe GitHub context for troubleshooting.
+      # This does not print the OIDC token or AWS credentials.
+      - name: Diagnose GitHub OIDC context
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          REPOSITORY_OWNER_ID: ${{ github.repository_owner_id }}
+          GIT_REF: ${{ github.ref }}
+          WORKFLOW: ${{ github.workflow }}
+        run: |
+          echo "Repository: $REPOSITORY"
+          echo "Repository ID: $REPOSITORY_ID"
+          echo "Repository owner: $REPOSITORY_OWNER"
+          echo "Repository owner ID: $REPOSITORY_OWNER_ID"
+          echo "Git ref: $GIT_REF"
+          echo "Workflow: $WORKFLOW"
+
+      # Step 6: Authenticate to AWS using GitHub OIDC.
       - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::126309364316:role/GitHubActionsDevSecOpsRole
           aws-region: ${{ env.AWS_REGION }}
 
-      # Step 6: Verify AWS identity
+      # Step 7: Verify the AWS identity.
       - name: Verify AWS identity
         run: aws sts get-caller-identity
 
-      # Step 7: Log in to Amazon ECR
+      # Step 8: Authenticate Docker to Amazon ECR.
       - name: Log in to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Step 8: Push the image only if the scan passes
+      # Step 9: Push only after the build, test, scan,
+      # and AWS authentication steps have succeeded.
       - name: Push Docker image to ECR
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -102,7 +124,7 @@ jobs:
 
           docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
-      # Step 9: Display the published image
+      # Step 10: Display the published image reference.
       - name: Display published image
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
