@@ -10,7 +10,6 @@ on:
 
   workflow_dispatch:
 
-# Allow GitHub to read the repository and request an OIDC token.
 permissions:
   contents: read
   id-token: write
@@ -26,11 +25,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Download the repository.
+      # 1. Download repository source code
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # Step 2: Build the Docker image.
+      # 2. Build Docker image
       - name: Build Docker image
         env:
           IMAGE_TAG: ${{ github.sha }}
@@ -39,11 +38,13 @@ jobs:
             -t "$ECR_REPOSITORY:$IMAGE_TAG" \
             ./app
 
-      # Step 3: Start the container and test the API.
+      # 3. Test API health endpoint
       - name: Test Docker image
         env:
           IMAGE_TAG: ${{ github.sha }}
         run: |
+          set -eu
+
           docker run -d \
             --name devsecops-api-test \
             -p 127.0.0.1:8000:8000 \
@@ -58,15 +59,16 @@ jobs:
               exit 0
             fi
 
-            echo "Waiting for API..."
+            echo "Waiting for API... attempt $attempt"
             sleep 3
           done
 
-          docker logs devsecops-api-test
+          echo "API health check failed."
+          docker logs devsecops-api-test || true
           docker rm -f devsecops-api-test || true
           exit 1
 
-      # Step 4: Scan for HIGH and CRITICAL vulnerabilities.
+      # 4. Scan image for vulnerabilities
       - name: Scan Docker image with Trivy
         uses: aquasecurity/trivy-action@master
         with:
@@ -77,8 +79,7 @@ jobs:
           vuln-type: os,library
           severity: CRITICAL,HIGH
 
-      # Step 5: Print safe GitHub context for troubleshooting.
-      # This does not print the OIDC token or AWS credentials.
+      # 5. Diagnose GitHub repository identity
       - name: Diagnose GitHub OIDC context
         env:
           REPOSITORY: ${{ github.repository }}
@@ -95,40 +96,57 @@ jobs:
           echo "Git ref: $GIT_REF"
           echo "Workflow: $WORKFLOW"
 
-      # Step 6: Authenticate to AWS using GitHub OIDC.
+      # 6. Diagnose actual OIDC claims without printing the token
+      - name: Diagnose actual OIDC claims
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const token = await core.getIDToken('sts.amazonaws.com');
+
+            const payload = JSON.parse(
+              Buffer.from(token.split('.')[1], 'base64url').toString()
+            );
+
+            core.info(`OIDC subject: ${payload.sub}`);
+            core.info(`OIDC audience: ${payload.aud}`);
+
+      # 7. Authenticate to AWS using GitHub OIDC
       - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::126309364316:role/GitHubActionsDevSecOpsRole
           aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
 
-      # Step 7: Verify the AWS identity.
+      # 8. Verify AWS authentication
       - name: Verify AWS identity
-        run: aws sts get-caller-identity
+        run: |
+          aws sts get-caller-identity
 
-      # Step 8: Authenticate Docker to Amazon ECR.
+      # 9. Authenticate Docker to Amazon ECR
       - name: Log in to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Step 9: Push only after the build, test, scan,
-      # and AWS authentication steps have succeeded.
+      # 10. Push Docker image to ECR
       - name: Push Docker image to ECR
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
+          set -eu
+
           docker tag \
             "$ECR_REPOSITORY:$IMAGE_TAG" \
             "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
           docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
-      # Step 10: Display the published image reference.
+      # 11. Display published image
       - name: Display published image
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          echo "Successfully published:"
+          echo "Successfully published Docker image:"
           echo "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
