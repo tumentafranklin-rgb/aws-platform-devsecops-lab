@@ -249,20 +249,50 @@ docker cp \
     "${NGINX_CONTAINER}:/tmp/default.conf.candidate"
 
 # ------------------------------------------------------------
-# 9. Switch Nginx to the new API
+# 9. Validate the candidate before switching Nginx
+# ------------------------------------------------------------
+
+echo
+echo "Validating the candidate Nginx configuration..."
+
+# Create a separate directory for candidate validation.
+docker exec "${NGINX_CONTAINER}" \
+    mkdir -p /tmp/nginx-candidate/conf.d
+
+# Place only the candidate server configuration in that directory.
+docker exec "${NGINX_CONTAINER}" sh -c \
+    "cp /tmp/default.conf.candidate /tmp/nginx-candidate/conf.d/default.conf"
+
+# Build an isolated main configuration using the candidate include.
+docker exec "${NGINX_CONTAINER}" sh -c \
+    "sed 's|include /etc/nginx/conf.d/\*.conf;|include /tmp/nginx-candidate/conf.d/*.conf;|' /etc/nginx/nginx.conf > /tmp/nginx-candidate/nginx.conf"
+
+# Confirm that the candidate include is present.
+docker exec "${NGINX_CONTAINER}" \
+    grep -Fq \
+    'include /tmp/nginx-candidate/conf.d/*.conf;' \
+    /tmp/nginx-candidate/nginx.conf
+
+# Test the candidate without replacing the live configuration.
+docker exec "${NGINX_CONTAINER}" \
+    nginx -t -c /tmp/nginx-candidate/nginx.conf
+
+echo "Candidate Nginx configuration validation passed."
+
+# ------------------------------------------------------------
+# 10. Switch Nginx to the new API
 # ------------------------------------------------------------
 
 echo
 echo "Switching Nginx to the new API..."
 
-# Enable rollback before changing the active configuration.
+# Enable rollback immediately before replacing the active file.
 SWITCH_STARTED=1
 
-# Install the candidate configuration, then validate it.
-# The ERR trap restores the backup if validation or reload fails.
 docker exec "${NGINX_CONTAINER}" sh -c \
     "cp /tmp/default.conf.candidate '${NGINX_CONFIG}'"
 
+# Validate the installed configuration before reloading.
 docker exec "${NGINX_CONTAINER}" nginx -t
 
 docker exec "${NGINX_CONTAINER}" nginx -s reload
