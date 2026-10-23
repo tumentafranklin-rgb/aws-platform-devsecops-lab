@@ -13,6 +13,7 @@ ECR_REPOSITORY="devsecops-lab-api"
 
 NGINX_CONTAINER="nginx-test"
 NGINX_CONFIG="/etc/nginx/conf.d/default.conf"
+HOST_NGINX_CONFIG="/opt/devsecops-lab/nginx/default.conf"
 
 DOCKER_NETWORK="devsecops-network"
 
@@ -66,8 +67,7 @@ rollback() {
 
     if [[ "${SWITCH_STARTED}" -eq 1 && "${BACKUP_CREATED}" -eq 1 ]]; then
 
-        if docker cp "${HOST_BACKUP}" \
-            "${NGINX_CONTAINER}:${NGINX_CONFIG}" &&
+        if cat "${HOST_BACKUP}" > "${HOST_NGINX_CONFIG}" &&
            docker exec "${NGINX_CONTAINER}" nginx -t &&
            docker exec "${NGINX_CONTAINER}" nginx -s reload; then
 
@@ -118,6 +118,11 @@ docker inspect "${NGINX_CONTAINER}" >/dev/null
 
 docker network inspect "${DOCKER_NETWORK}" >/dev/null
 
+# Verify the host-side Nginx configuration exists.
+test -f "${HOST_NGINX_CONFIG}"
+test -w "${HOST_NGINX_CONFIG}"
+
+
 # Ensure the expected Nginx configuration exists.
 docker exec "${NGINX_CONTAINER}" \
     test -f "${NGINX_CONFIG}"
@@ -164,10 +169,20 @@ docker pull "${IMAGE_URI}"
 # 5. Avoid overwriting an existing container
 # ------------------------------------------------------------
 
+REUSE_CONTAINER=0
+
 if docker inspect "${NEW_CONTAINER}" >/dev/null 2>&1; then
-    echo "ERROR: Container ${NEW_CONTAINER} already exists."
-    echo "Choose a different IMAGE_TAG or inspect the existing container."
-    exit 1
+    EXISTING_IMAGE=$(docker inspect "${NEW_CONTAINER}" --format '{{.Config.Image}}')
+    EXISTING_RUNNING=$(docker inspect "${NEW_CONTAINER}" --format '{{.State.Running}}')
+
+    if [[ "${EXISTING_IMAGE}" != "${IMAGE_URI}" ||
+          "${EXISTING_RUNNING}" != "true" ]]; then
+        echo "ERROR: Existing container is not the expected running image."
+        exit 1
+    fi
+
+    echo "Reusing existing running API container: ${NEW_CONTAINER}"
+    REUSE_CONTAINER=1
 fi
 
 # ------------------------------------------------------------
@@ -177,6 +192,7 @@ fi
 echo
 echo "Starting new API container..."
 
+if [[ "${REUSE_CONTAINER}" -eq 0 ]]; then
 docker run -d \
     --name "${NEW_CONTAINER}" \
     --network "${DOCKER_NETWORK}" \
@@ -184,6 +200,7 @@ docker run -d \
     --label "project=aws-platform-devsecops-lab" \
     --label "deployment-image=${IMAGE_URI}" \
     "${IMAGE_URI}"
+fi
 
 # ------------------------------------------------------------
 # 7. Wait for the new API to become healthy
@@ -289,8 +306,7 @@ echo "Switching Nginx to the new API..."
 # Enable rollback immediately before replacing the active file.
 SWITCH_STARTED=1
 
-docker exec "${NGINX_CONTAINER}" sh -c \
-    "cp /tmp/default.conf.candidate '${NGINX_CONFIG}'"
+cat "${HOST_NEW_CONFIG}" > "${HOST_NGINX_CONFIG}"
 
 # Validate the installed configuration before reloading.
 docker exec "${NGINX_CONTAINER}" nginx -t
