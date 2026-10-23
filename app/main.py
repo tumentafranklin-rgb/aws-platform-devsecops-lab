@@ -1,3 +1,4 @@
+from prometheus_fastapi_instrumentator import Instrumentator
 from datetime import datetime, timezone
 
 from fastapi import FastAPI
@@ -33,3 +34,4 @@ def info():
         "environment": "development",
         "version": "1.0.0",
     }
+Instrumentator().instrument(app).expose(app)
