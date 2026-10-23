@@ -153,6 +153,7 @@ jobs:
   deploy-to-ec2:
     name: Validate image on EC2 through SSM
     needs: build-test-scan-push
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
 
     steps:
