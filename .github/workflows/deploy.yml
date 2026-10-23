@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "app/**"
+      - "scripts/deploy-api.sh"
       - ".github/workflows/deploy.yml"
 
   workflow_dispatch:
