@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
   id-token: write
 
 env:
@@ -22,6 +23,7 @@ env:
 jobs:
   build-test-scan-push:
     name: Build, Test, Scan, and Push Docker Image
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
 
     steps:
@@ -184,7 +186,6 @@ jobs:
           echo "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
   deploy-to-ec2:
     name: Deploy API to EC2 through SSM
-    needs: build-test-scan-push
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -193,6 +194,29 @@ jobs:
       cancel-in-progress: false
 
     steps:
+      - name: Verify successful CI for deployment commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          WORKFLOW_FILE: deploy.yml
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Checking successful CI for commit: $SHA"
+
+          RUNS=$(gh api             "repos/$REPO/actions/workflows/$WORKFLOW_FILE/runs"             -f head_sha="$SHA"             -f event="push"             -f status="success"             --method GET)
+
+          COUNT=$(echo "$RUNS" | jq             '[.workflow_runs[] | select(.head_sha == env.SHA and .event == "push" and .conclusion == "success")] | length')
+
+          if [ "$COUNT" -lt 1 ]; then
+            echo "ERROR: No successful push CI run found for commit $SHA"
+            exit 1
+          fi
+
+          echo "SUCCESS: Found successful CI run for commit $SHA"
+
       - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
