@@ -140,7 +140,39 @@ jobs:
             "$ECR_REPOSITORY:$IMAGE_TAG" \
             "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
-          docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          if aws ecr describe-images             --repository-name "$ECR_REPOSITORY"             --image-ids "imageTag=$IMAGE_TAG"             --region "$AWS_REGION"             --query 'imageDetails[0].imageDigest'             --output text > /tmp/ecr-image-digest.txt 2>/tmp/ecr-image-error.txt; then
+
+            DIGEST=$(cat /tmp/ecr-image-digest.txt)
+            echo "Image already exists in ECR."
+            echo "Image digest: $DIGEST"
+            echo "Verifying existing ECR image matches local build..."
+
+            docker pull "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+            LOCAL_ID=$(docker image inspect               "$ECR_REPOSITORY:$IMAGE_TAG"               --format '{{.Id}}')
+
+            ECR_ID=$(docker image inspect               "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"               --format '{{.Id}}')
+
+            if [ "$LOCAL_ID" != "$ECR_ID" ]; then
+              echo "ERROR: Existing ECR image differs from local build."
+              exit 1
+            fi
+
+            echo "Image identity verified."
+            echo "Reusing existing immutable image."
+
+          elif grep -q 'ImageNotFoundException' /tmp/ecr-image-error.txt; then
+
+            echo "Image does not exist in ECR. Pushing new image..."
+            docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+          else
+
+            echo "ERROR: Unable to verify image in ECR."
+            cat /tmp/ecr-image-error.txt
+            exit 1
+
+          fi
 
       # 11. Display published image
       - name: Display published image
