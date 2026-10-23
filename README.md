@@ -99,3 +99,46 @@ This repository is a learning and portfolio lab demonstrating:
 - Metrics collection and dashboard-based monitoring.
 
 Infrastructure definitions are documented separately from deployment status. Verify Terraform state and the AWS environment to determine which resources are currently deployed.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    subgraph CI["GitHub Actions — Image Delivery"]
+        Source["Source code"] --> Build["Docker build"]
+        Build --> Test["Container health test"]
+        Test --> Scan["Trivy vulnerability scan"]
+        Scan --> Publish["Authenticate to AWS using OIDC"]
+        Publish --> ECR["Amazon ECR"]
+    end
+
+    subgraph Deployment["Manual Deployment"]
+        Operator["Operator"] --> SSM["AWS Systems Manager session"]
+        SSM --> Script["deploy-api.sh"]
+        ECR -->|"Pull selected IMAGE_TAG"| Script
+        Script --> Candidate["Start FastAPI container"]
+        Candidate --> Health{"Health checks"}
+        Health -->|"Pass"| Nginx["Update Nginx routing"]
+        Health -->|"Failure"| Rollback["Rollback handling"]
+        Nginx --> API["FastAPI application"]
+    end
+
+    subgraph Monitoring["Monitoring"]
+        Prometheus["Prometheus"] --> Grafana["Grafana dashboards"]
+    end
+
+    subgraph Terraform["Terraform Definitions — Deployment Status Varies"]
+        VPC["VPC"] --> Public["Public subnet"]
+        VPC --> Private["Private subnet"]
+        SG["Security groups"]
+        EC2["EC2 lab host"]
+    end
+```
+
+The diagram summarizes image delivery, manual deployment, monitoring, and infrastructure definitions. Terraform resources shown here are defined in code; verify Terraform state and AWS to confirm which resources are deployed. The subnet placement and monitoring scrape targets are not specified in this overview.
+
+## Author
+
+**Tumenta Franklin**
+
+Built as a hands-on AWS platform engineering and DevSecOps portfolio project.
