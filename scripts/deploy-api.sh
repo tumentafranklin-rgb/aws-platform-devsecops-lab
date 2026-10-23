@@ -243,7 +243,7 @@ echo
 echo "Preparing the Nginx configuration..."
 
 sed \
-    "s|http://api:8000/|http://${NEW_CONTAINER}:8000/|g" \
+    "s|http://devsecops-api-[a-f0-9]\{40\}:8000/|http://${NEW_CONTAINER}:8000/|g" \
     "${HOST_BACKUP}" > "${HOST_NEW_CONFIG}"
 
 # Ensure both routes point to the new container.
