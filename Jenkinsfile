@@ -67,4 +67,3 @@ print("PASS: /health returned HTTP 200 and healthy")
         }
     }
 }
-}
